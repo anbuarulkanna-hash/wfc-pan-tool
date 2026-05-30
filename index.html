@@ -1521,7 +1521,7 @@ function preprocess(img, scale, sharpen){
 async function renderPdfPage(buf, page, scale){
   if(!window.pdfjsLib) throw new Error("PDF reader not loaded. Use GitHub Pages version.");
   try{ pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"; }catch(e){}
-  const pdfData=buf instanceof Uint8Array?buf:new Uint8Array(buf); let pdf; try{ pdf=await pdfjsLib.getDocument({data:pdfData}).promise; }
+  const pdfData=(buf instanceof Uint8Array?buf:new Uint8Array(buf)).slice(); let pdf; try{ pdf=await pdfjsLib.getDocument({data:pdfData}).promise; }
   catch(err){ if(/password/i.test(err.message||"")) throw new Error("PDF password-protected."); throw err; }
   const pg=await pdf.getPage(page); const vp=pg.getViewport({scale});
   const c=document.createElement("canvas"); c.width=vp.width; c.height=vp.height;
@@ -1532,7 +1532,7 @@ async function renderPdfPage(buf, page, scale){
 /* PDF text extraction with position sorting */
 async function extractPdfText(buf){
   if(!window.pdfjsLib) return "";
-  const pdfData=buf instanceof Uint8Array?buf:new Uint8Array(buf); let pdf; try{ pdf=await pdfjsLib.getDocument({data:pdfData}).promise; }catch(e){ return ""; }
+  const pdfData=(buf instanceof Uint8Array?buf:new Uint8Array(buf)).slice(); let pdf; try{ pdf=await pdfjsLib.getDocument({data:pdfData}).promise; }catch(e){ return ""; }
   const LINE_GAP=4, COL_GAP=30; let text="";
   for(let pi=1;pi<=Math.min(pdf.numPages,2);pi++){
     const pg=await pdf.getPage(pi); const tc=await pg.getTextContent();
