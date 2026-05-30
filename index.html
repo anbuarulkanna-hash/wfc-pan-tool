@@ -1749,13 +1749,13 @@ async function getFocusedNameOCR(buf, statusFn){
   if(dobYfromTop!==null){
     const dobFrac=dobYfromTop/pageH;
     /* Name is 1-3 lines above DOB — each line ~3% of page height */
-    cropTopFrac=Math.max(0.60, dobFrac-0.10);
-    cropBotFrac=Math.min(1.0,  dobFrac+0.02);
+    cropTopFrac=Math.max(0.70, dobFrac-0.07);
+    cropBotFrac=Math.min(1.0,  dobFrac+0.01);
     cropLeftFrac=0.18; /* skip photo area */
   } else {
-    /* Fallback: UIDAI Aadhaar letter — card section is bottom 30%, name at ~75-83% */
-    cropTopFrac=0.72;
-    cropBotFrac=0.85;
+    /* Fallback: UIDAI letter — card name is at ~80-87% of page height (below card header) */
+    cropTopFrac=0.79;
+    cropBotFrac=0.88;
     cropLeftFrac=0.18;
   }
 
@@ -1796,7 +1796,7 @@ async function getFocusedNameOCR(buf, statusFn){
 
   /* Step 8: Parse name from the focused crop text
      In this small crop, the name is the most prominent text — first valid line wins */
-  const SKIP_NAME=/(?:GOVERNMENT|UIDAI|AADHAAR|INDIA|DOB|YEAR|GENDER|VID|INCOME|TAX|DATE|BIRTH|UNIQUE|AUTHORITY|IDENTIFICATION|PERMANENT|ACCOUNT|NUMBER|ENROLMENT|VALID)/i;
+  const SKIP_NAME=/\b(?:GOVERNMENT|GOVERMMEM|GOVER|LNDIA|UNIQUE|UIDAI|AADHAAR|INDIA|DOB|YEAR|GENDER|VID|INCOME|TAX|DATE|BIRTH|AUTHORITY|IDENTIFICAT|PERMANENT|ACCOUNT|NUMBER|ENROLMENT|VALID|BHARATIYA|VISHISHT)\b/i;
   const lines=nameText.split(/\n/).map(s=>s.trim()).filter(l=>l.length>2);
 
   for(const ln of lines){
