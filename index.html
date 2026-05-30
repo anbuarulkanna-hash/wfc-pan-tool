@@ -1607,35 +1607,70 @@ function ascii(s){ return s.replace(/[^\x00-\x7F]/g,"").replace(/\s+/g," ").trim
     if(pins.length) out.pin=pins[pins.length-1];
 
     /* Mobile */
-    const mobM=T.match(/Mobile\s*[:\-]?\s*([6-9]\d{9})/i);
+    const mobM=T.match(/Mobile\s*[:\-;]?\s*([6-9]\d{9})/i); /* ; = OCR misread of : */
     if(mobM) out.mobile=mobM[1];
     else{ const m10=[...T.matchAll(/\b([6-9]\d{9})\b/g)].map(m=>m[1]).filter(m=>!out.num||!out.num.includes(m)); if(m10.length) out.mobile=m10[0]; }
 
     /* Build English-only line list for name/address */
     const engLines=allLines.map(l=>isEng(l)?l:ascii(l)).filter(l=>l.length>2);
 
-    /* Name — DOB-anchored search in English lines */
+    /* Name — DOB-anchored search with sliding window (handles OCR junk on same line) */
     const scoreN=s=>Math.max(0,...s.split(/\s+/).map(w=>w.length));
+    /* Extract best name from a line:
+       - Words >=3 chars only; max 3-word window (First [Middle] Last)
+       - Prefer leftmost position, then longer, then higher score */
+    function bestNameInLine(line){
+      const words=(line.match(/[A-Za-z]{3,}/g)||[]);
+      let best="",bestI=999,bestLen=0,bestSc=0;
+      for(let len=2;len<=3;len++){
+        for(let i=0;i<=words.length-len;i++){
+          const cand=words.slice(i,i+len).join(" ");
+          if(SKIP.test(cand)) continue;
+          const sc=Math.max(...words.slice(i,i+len).map(w=>w.length));
+          if(sc<4) continue;
+          if(i<bestI||(i===bestI&&len>bestLen)||(i===bestI&&len===bestLen&&sc>bestSc)){
+            bestI=i;bestLen=len;bestSc=sc;best=cand;
+          }
+        }
+      }
+      return bestSc>=4?best:"";
+    }
     let dobIdx=-1;
     for(let i=0;i<engLines.length;i++){
       if(/(?:DOB|Date of Birth)[:\s\/]*\d{2}[\/\-\.]\d{2}[\/\-\.]\d{4}/i.test(engLines[i])){ dobIdx=i; break; }
     }
+    /* Lines that are clearly NOT a name — skip in backward search */
+    const LINE_SKIP=/^(?:District|Dist\b|State\b|PIN|Pin\s*Code|PO:|VTC:|Mobile|Landline|Email|Enrolment|Valid|Aadhaar|UIDAI|VID|Unique|Government|Authority|Govt|India|To\b|[0-9])/i;
+    /* ADDR_LINE: once we see address start, stop going further back */
+    const ADDR_LINE=/^(?:[CS5][\/\\][O0]|[DW]\/O)/i;
     if(dobIdx>0){
       let best="", bestScore=0;
-      for(let j=dobIdx-1;j>=Math.max(0,dobIdx-30);j--){
-        const lat=(engLines[j].match(/[A-Za-z]+/g)||[]).join(" ").trim();
-        if(lat.length<3||lat.length>60||SKIP.test(lat)||/\d/.test(lat)) continue;
-        const ws=lat.split(/\s+/); if(ws.length>5) continue;
-        const sc=scoreN(lat); if(sc>bestScore){ bestScore=sc; best=lat; }
+      /* Narrow pass: look only in 8 lines just before DOB — name is always here in card */
+      for(let j=dobIdx-1;j>=Math.max(0,dobIdx-8);j--){
+        if(LINE_SKIP.test(engLines[j].trim())) continue;
+        const cand=bestNameInLine(engLines[j]);
+        if(!cand) continue;
+        const sc=scoreN(cand);
+        /* prefer longer candidate when score ties */
+        if(sc>bestScore||(sc===bestScore&&cand.length>best.length)){ bestScore=sc; best=cand; }
       }
-      if(bestScore>=3) out.name=best.toUpperCase().replace(/\s+/g," ").trim();
+      /* Wide pass: if narrow pass failed, search up to 30 lines but stop at address block */
+      if(bestScore<4){
+        for(let j=dobIdx-9;j>=Math.max(0,dobIdx-30);j--){
+          if(ADDR_LINE.test(engLines[j].trim())) break; /* hit address start, stop */
+          if(LINE_SKIP.test(engLines[j].trim())) continue;
+          const cand=bestNameInLine(engLines[j]);
+          if(!cand) continue;
+          const sc=scoreN(cand);
+          if(sc>bestScore||(sc===bestScore&&cand.length>best.length)){ bestScore=sc; best=cand; }
+        }
+      }
+      if(bestScore>=4) out.name=best.toUpperCase().replace(/\s+/g," ").trim();
     }
     if(!out.name){
       for(const ln of engLines){
-        const lat=(ln.match(/[A-Za-z]+/g)||[]).join(" ").trim();
-        if(lat.length<4||lat.length>60||SKIP.test(lat)||/\d/.test(lat)) continue;
-        const ws=lat.split(/\s+/); if(ws.length<2||ws.length>5||scoreN(lat)<4) continue;
-        out.name=lat.toUpperCase().replace(/\s+/g," ").trim(); break;
+        const cand=bestNameInLine(ln);
+        if(cand){ out.name=cand.toUpperCase().replace(/\s+/g," ").trim(); break; }
       }
     }
 
@@ -1644,7 +1679,7 @@ function ascii(s){ return s.replace(/[^\x00-\x7F]/g,"").replace(/\s+/g," ").trim
     if(dm) out.district=dm[1].trim().toUpperCase();
 
     /* Address */
-    const ASTART=/^(?:C\/O|S\/O|D\/O|W\/O|Address\s*:|Flat\b|Door\b|Plot\b|#\d)/i;
+    const ASTART=/^(?:[CS5][\/\\][O0]|[DW]\/O|Address\s*:|Flat\b|Door\b|Plot\b|#\d)/i; /* 5/0 = OCR misread of S/O */
     const ASTOP=/^(?:State\b|State\/|PIN\b|Pin\s*Code|Validity|Digitally|UIDAI|Aadhaar\s+is|mAadhaar|Entities|Documents\s+to)/i;
     let col=false, addrLines=[];
     for(const ln of engLines){
@@ -1662,7 +1697,109 @@ function ascii(s){ return s.replace(/[^\x00-\x7F]/g,"").replace(/\s+/g," ").trim
     return out;
   }
 
-  readBtn.addEventListener("click", async()=>{
+  /* ════════════════════════════════════════
+   FOCUSED NAME OCR — Option 6
+   Crops the name area from Aadhaar card section
+   and OCRs at 6× resolution for maximum accuracy
+   ════════════════════════════════════════ */
+async function getFocusedNameOCR(buf, statusFn){
+  if(typeof Tesseract==="undefined") return null;
+
+  /* Step 1: Load PDF and get page dimensions + DOB text position */
+  const pdf=await pdfjsLib.getDocument({data:buf.slice()}).promise;
+  const page=await pdf.getPage(1);
+  const vp1=page.getViewport({scale:1});
+  const pageW=vp1.width, pageH=vp1.height;
+
+  /* Step 2: Try to get DOB y-coordinate from text extraction */
+  let dobYfromTop=null; // y from TOP of page, in PDF units
+  try{
+    const tc=await page.getTextContent();
+    for(const item of tc.items){
+      const s=item.str||"";
+      /* DOB label or date pattern */
+      if(/DOB|Date of Birth/i.test(s)||/\d{2}[\/\.]\d{2}[\/\.]\d{4}/.test(s)){
+        /* PDF origin is bottom-left; transform[5] is y from bottom */
+        dobYfromTop=pageH-item.transform[5];
+        break;
+      }
+    }
+  }catch(e){}
+
+  /* Step 3: Define the crop region
+     Standard Aadhaar card: card section is bottom ~40% of A4 page
+     Within card: photo on left (~20% width), name above DOB
+     Name is typically 1-2 lines above DOB (~5-8% of page height) */
+  let cropTopFrac, cropBotFrac, cropLeftFrac;
+
+  if(dobYfromTop!==null){
+    const dobFrac=dobYfromTop/pageH;
+    /* Name is 1-3 lines above DOB — each line ~3% of page height */
+    cropTopFrac=Math.max(0.45, dobFrac-0.10);
+    cropBotFrac=Math.min(1.0,  dobFrac+0.01);
+    cropLeftFrac=0.18; /* skip photo area */
+  } else {
+    /* Fallback: hard-coded for standard UIDAI Aadhaar letter layout */
+    cropTopFrac=0.58;
+    cropBotFrac=0.72;
+    cropLeftFrac=0.18;
+  }
+
+  /* Step 4: Render at a scale that gives ~300-500px height for the name crop
+     This achieves ~6× effective resolution on the name text */
+  const nameAreaHeight=(cropBotFrac-cropTopFrac)*pageH; /* in PDF units */
+  const targetPx=400; /* target pixel height for name area */
+  const renderScale=Math.min(6.0, Math.max(3.0, targetPx/nameAreaHeight));
+
+  if(statusFn) statusFn("Rendering name area at "+renderScale.toFixed(1)+"×…");
+
+  const vpRender=page.getViewport({scale:renderScale});
+  /* Only render if canvas won't exceed memory (~4000×5000px) */
+  if(vpRender.width*vpRender.height>20000000) return null;
+
+  const renderCanvas=document.createElement("canvas");
+  renderCanvas.width=vpRender.width; renderCanvas.height=vpRender.height;
+  await page.render({canvasContext:renderCanvas.getContext("2d"),viewport:vpRender}).promise;
+
+  /* Step 5: Crop to name region */
+  const cY=Math.round(cropTopFrac*renderCanvas.height);
+  const cH=Math.round((cropBotFrac-cropTopFrac)*renderCanvas.height);
+  const cX=Math.round(cropLeftFrac*renderCanvas.width);
+  const cW=renderCanvas.width-cX;
+
+  const nameCrop=document.createElement("canvas");
+  nameCrop.width=cW; nameCrop.height=cH;
+  nameCrop.getContext("2d").drawImage(renderCanvas,cX,cY,cW,cH,0,0,cW,cH);
+
+  /* Step 6: Preprocess — grayscale + contrast + sharpen */
+  const processed=preprocess(nameCrop,1,true);
+
+  /* Step 7: OCR the small high-res crop */
+  if(statusFn) statusFn("OCR name region ("+cW+"×"+cH+"px)…");
+  const nameText=await runOCR(processed,statusFn);
+
+  if(!nameText||nameText.trim().length<2) return null;
+
+  /* Step 8: Parse name from the focused crop text
+     In this small crop, the name is the most prominent text — first valid line wins */
+  const SKIP_NAME=/(?:GOVERNMENT|UIDAI|AADHAAR|INDIA|DOB|YEAR|GENDER|VID|INCOME|TAX|DATE|BIRTH|UNIQUE|AUTHORITY|IDENTIFICATION|PERMANENT|ACCOUNT|NUMBER|ENROLMENT|VALID)/i;
+  const lines=nameText.split(/\n/).map(s=>s.trim()).filter(l=>l.length>2);
+
+  for(const ln of lines){
+    const words=(ln.match(/[A-Za-z]{3,}/g)||[]);
+    if(words.length<2||words.length>5) continue;
+    const candidate=words.join(" ");
+    if(SKIP_NAME.test(candidate)) continue;
+    if(/\d/.test(candidate)) continue;
+    const maxWord=Math.max(...words.map(w=>w.length));
+    if(maxWord<4) continue;
+    /* Found a valid name line */
+    return candidate.toUpperCase().replace(/\s+/g," ").trim();
+  }
+  return null;
+}
+
+readBtn.addEventListener("click", async()=>{
     if(!chosen) return;
     readBtn.disabled=true; reviewPanel.style.display="none"; previewWrap.style.display="none";
     ss("Reading…");
@@ -1691,6 +1828,16 @@ function ascii(s){ return s.replace(/[^\x00-\x7F]/g,"").replace(/\s+/g," ").trim
       }
       rawBox.textContent=text||"(no text found)";
       const p=parseAadhaar(text);
+
+      /* ── Option 6: Focused name crop at 6× for high-accuracy name OCR ── */
+      if(chosen.type==="application/pdf"||/\.pdf$/i.test(chosen.name)){
+        try{
+          ss("Running focused name OCR at 6×…");
+          const focusedName=await getFocusedNameOCR(new Uint8Array(await chosen.arrayBuffer()),ss);
+          if(focusedName) p.name=focusedName;
+        }catch(e){ console.warn("Focused name OCR failed:",e.message); }
+      }
+
       $("aaName").value=p.name||""; $("aaNumR").value=p.num||""; $("aaDob").value=p.dob||"";
       $("aaGender").value=p.gender||""; $("aaAddr").value=p.addr||""; $("aaDistrict").value=p.district||"";
       $("aaState").value=p.state||""; $("aaPin").value=p.pin||""; $("aaMobile").value=p.mobile||"";
