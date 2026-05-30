@@ -1681,13 +1681,27 @@ function ascii(s){ return s.replace(/[^\x00-\x7F]/g,"").replace(/\s+/g," ").trim
     /* Address */
     const ASTART=/^(?:[CS5][\/\\][O0]|[DW]\/O|Address\s*:|Flat\b|Door\b|Plot\b|#\d)/i; /* 5/0 = OCR misread of S/O */
     const ASTOP=/^(?:State\b|State\/|PIN\b|Pin\s*Code|Validity|Digitally|UIDAI|Aadhaar\s+is|mAadhaar|Entities|Documents\s+to)/i;
+    /* Clean address line: split at right-column separator (|, &, ', [, ], or double-comma) */
+    function cleanAddrLine(ln){
+      // Split at right-column separator: |, &, [, {, double-comma, space-before-comma, quote+space+alphanum
+      const sepRe=/\s*[|&\[{]\s*|\s*,\s*,\s*|\s,\s|\s+'\s+[A-Z0-9]/;
+      const m=ln.search(sepRe);
+      let clean=m>3?ln.substring(0,m):ln;
+      if(m>=0&&m<=3) return ''; // garbage from start
+      clean=ascii(clean).replace(/[,\s]+$/,"").replace(/^[+\-*\s]+/,"").trim();
+      // Reject lines with remaining garbage characters
+      if(/[|&\[\]{}@!~`$%^*]/.test(clean)) return '';
+      return clean;
+    }
     let col=false, addrLines=[];
     for(const ln of engLines){
       if(!col&&ASTART.test(ln)) col=true;
       if(col){
         if(ASTOP.test(ln)) break;
+        if(addrLines.length>12) break; /* real address max 12 lines */
         const d2=ln.match(/(?:District|Dist)[:\s,]+([A-Za-z][A-Za-z\s]+)/i); if(d2&&!out.district) out.district=d2[1].trim().toUpperCase();
-        addrLines.push(ascii(ln).replace(/[,\s]+$/,""));
+        const clean=cleanAddrLine(ln);
+        if(clean.length>1) addrLines.push(clean);
       }
     }
     if(addrLines.length){
@@ -1735,13 +1749,13 @@ async function getFocusedNameOCR(buf, statusFn){
   if(dobYfromTop!==null){
     const dobFrac=dobYfromTop/pageH;
     /* Name is 1-3 lines above DOB — each line ~3% of page height */
-    cropTopFrac=Math.max(0.45, dobFrac-0.10);
-    cropBotFrac=Math.min(1.0,  dobFrac+0.01);
+    cropTopFrac=Math.max(0.60, dobFrac-0.10);
+    cropBotFrac=Math.min(1.0,  dobFrac+0.02);
     cropLeftFrac=0.18; /* skip photo area */
   } else {
-    /* Fallback: hard-coded for standard UIDAI Aadhaar letter layout */
-    cropTopFrac=0.58;
-    cropBotFrac=0.72;
+    /* Fallback: UIDAI Aadhaar letter — card section is bottom 30%, name at ~75-83% */
+    cropTopFrac=0.72;
+    cropBotFrac=0.85;
     cropLeftFrac=0.18;
   }
 
